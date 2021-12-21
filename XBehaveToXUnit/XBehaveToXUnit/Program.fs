@@ -3,6 +3,8 @@
 // For more information see https://aka.ms/fsharp-console-apps
 
 open System.IO
+open System.Text
+open System.Text.RegularExpressions
 open Argu
 open XBehaveToXUnit
 open FSharpPlus
@@ -25,7 +27,7 @@ let migrateFile path =
     printfn $"migrating {path}"
     let original = System.IO.File.ReadAllText path
     let migrated = Migrator.migrate original
-    System.IO.File.WriteAllText(path, migrated)
+    System.IO.File.WriteAllText(path, migrated, Encoding.UTF8)
     printfn $"done migrating {path}"
 
 type Arguments =
@@ -47,6 +49,7 @@ let results = parser.Parse argv
 
 let file = results.TryGetResult File
 let folder = results.TryGetResult Folder
+
 
 match folder, file with
 | Some folder, _ ->

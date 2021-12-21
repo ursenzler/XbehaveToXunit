@@ -16,13 +16,13 @@ let replaceScenario =
 
 let factNameAndArguments o =
     let argumentMatches = Regex.Matches(o, "\[Scenario\]\s*public void \w+\(\s*(?<arguments>[\w\[\]\s,?<>]*)\)\s*{")
-    let mutable x = Regex.Replace(o, "\[Scenario\]\s*public void (?<name>\w+)\(\s*(?<arguments>[\w\[\]\s,?<>]*)\)\s*{", "[Fact]\r\n        public async Task ${name}()\r\n        {\r\n            ${arguments}")
+    let mutable x = Regex.Replace(o, "\[Scenario\]\s*public void (?<name>\w+)\(\s*(?<arguments>[\w\[\]\s,?<>]*)\)\s*{", "[Fact]\r\n        public async Task ${name}()\r\n        {\r\n            °°${arguments}°°")
 
     for m in argumentMatches do
         let arguments = m.Groups["arguments"].Value
         let newArguments = arguments |> String.replace ",\r\n" ";\r\n" |> fun s -> if s.Length > 0 then s + ";\r\n" else s
 
-        x <- x |> String.replace arguments newArguments
+        x <- x |> String.replace ("°°" + arguments + "°°") newArguments
 
     x
 
@@ -53,7 +53,7 @@ let countArguments (arguments : string) =
 let findNthComma n (arguments : string) =
     let mutable found = 0
     let mutable index = 0
-    arguments
+    arguments + ","
     |> Seq.iteri (fun i c ->
         match c with
         | ',' ->
@@ -82,20 +82,22 @@ let escapeClosingBracketInStrings (o : string) =
         )
     |> fst
     |> String.replace "[]" "°o°c"
+    |> String.replace "[0]" "°o0°c"
+    |> String.replace "[Scenario]" "[|Scenario|]"
 
 let deEscapeClosingBracketInStrings (o : string) =
-    o |> String.replace "°c" "]" |> String.replace "°o" "["
+    o |> String.replace "°c" "]" |> String.replace "°o" "[" |> String.replace "|Scenario|" "Scenario"
 
 
 let factNameAndArgumentsOfExamples o =
     let escaped = escapeClosingBracketInStrings o
 
-    let matches = Regex.Matches(escaped, "\[Scenario\]\s*(?<examples>(\[Example\([\w\s\{\},?<>=\".\/\+\-\)\(:°]*\]\s*)+)public void (?<method>\w+)\(\s*(?<arguments>[\w\s\{\},?<>=\".\/\+\-\\[\]°)\(:]*)\)\s*{(?<body>[\w\s=.:;?<>=\r\n\"\(\)>$\{\},üäö<\\\/°\[\]\-]*)        }")
+    let matches = Regex.Matches(escaped, "\[\|Scenario\|\]\s*(?<examples>(\[Example\([\w\s\{\},?<>=\".\/\+\-\)\(:°]*\]\s*)+)public void (?<method>[\wöäü_]+)\(\s*(?<arguments>[\w\s\{\},?<>=\".\/\+\-\\[\]°)\(:]*)\)\s*{(?<body>[\w\s=.:;_?<>=\r\n\"\'(\)$\{\},üäö<\*\+\\\/°\[\]\-]*)        }")
     let mutable x = escaped
 
     for m in matches |> Seq.rev do // rev because we need to change the file from the end. Otherwise the indices are wrong
         let examples = m.Groups["examples"].Value
-        let firstExampleMatch = Regex.Match(examples, "\[Example\((?<arguments>[\w\s\{\}\[°,?<>=\"./+\-\)\(:]*)\)\]\r\n")
+        let firstExampleMatch = Regex.Match(examples, "\[Example\((?<arguments>[\w\s\{\}\[°,?<>=\".\/\+\-\)\(:]*)\)\]")
         let exampleArguments = firstExampleMatch.Groups["arguments"].Value
         let numberOfArguments = countArguments exampleArguments
 
@@ -117,18 +119,29 @@ let factNameAndArgumentsOfExamples o =
     x |> deEscapeClosingBracketInStrings
 
 
-let steps =
+let steps o =
+    let asyncStepsWithBraces a =
+        let r = Regex.Replace(a, "\${0,1}\"(?<text>.*)\"\.x\(async \(\)\s*=>\s*{(?<body>[\w\s=.:;\r\n\"\(\)>$,\/üäö+<\[\]-]*)}\);", "// ${text}\r\n            {${body}}")
+        r
+
     let asyncSteps a =
-        Regex.Replace(a, "\${0,1}\"(?<text>.*)\"\.x\(async \(\)\s*=>\s*", "// ${text}\r\n            ")
+        let r = Regex.Replace(a, "\${0,1}\"(?<text>.*)\"\.x\(\s*async \(\)\s*=>\s*", "// ${text}\r\n            ")
+        r
     let syncSteps s =
-        Regex.Replace(s, "\${0,1}\"(?<text>.*)\"\.x\(\(\)\s*=>\s*", "// ${text}\r\n            ")
+        let r = Regex.Replace(s, "\${0,1}\"(?<text>.*)\"\.x\(\s*\(\)\s*=>\s*", "// ${text}\r\n            ")
+        r
 
     let removeClosingParenthesisAsync x =
-        Regex.Replace(x, "(?<content>\${0,1}\"(?<text>.*)\"\.x\(async \(\)\s*=>[\w\s=.:\r\n\"\(\)>$\{\},üäö+<\[\]-]*)\);", "${content};")
+        Regex.Replace(x, "(?<content>\${0,1}\"(?<text>.*)\"\.x\(async \(\)\s*=>[\w\s=.:\r\n\"\(\)>$\{\}\/,üäö+<\[\]-]*)\);", "${content};")
     let removeClosingParenthesisSync x =
-        Regex.Replace(x, "(?<content>\${0,1}\"(?<text>.*)\"\.x\(\(\)\s*=>[\w\s=.:\r\n\"\(\)>$\{\},üäö+<\[\]-]*)\);", "${content};")
+        Regex.Replace(x, "(?<content>\${0,1}\"(?<text>.*)\"\.x\(\s*\(\)\s*=>[\w\s=.:\r\n\"\(\)>$\{\}\/,üäö+<\[\]-]*)\);", "${content};")
 
-    removeClosingParenthesisAsync >> removeClosingParenthesisSync >> asyncSteps >> syncSteps
+    o
+    |> asyncStepsWithBraces
+    |> removeClosingParenthesisAsync
+    |> removeClosingParenthesisSync
+    |> asyncSteps
+    |> syncSteps
 
 let examples o =
     o |> String.replace "[Example(" "[InlineData("
@@ -159,15 +172,36 @@ let orderUsings o =
 
 let addMissingAwaits =
     let addMissingAwaitsBeforeFactory x =
-        Regex.Replace(x, "(?<!await) this.factory.(?<kind>Modules|Queries|Operations|RejectOperation|Storage.\w+.Persist\()", " await this.factory.${kind}")
+        Regex.Replace(x, "(?<!await) this.factory.(?<kind>Modules|Queries|Operations|RejectOperation|SetupWorkflowToAccept|SetupWorkflowToCreatePendenz|Storage.\w+\s*.Persist\()", " await this.factory.${kind}")
     let addMissingAsyncInForEachAsync x =
         Regex.Replace(x, "(?<variable>[\w+\(\)])\s*.ForEachAsync\((?!async)", "${variable}.ForEachAsync(async ")
     let addMissingAwaitsInForEachAsync x =
         Regex.Replace(x, "(?<!await) (?<variable>\w+)\s*.ForEachAsync\(", " await ${variable}.ForEachAsync(")
     let addMissingAwaitsInSelectAsync x =
         Regex.Replace(x, "(?<!await) (?<variable>\w+)\s*.SelectAsync\(", " await ${variable}.SelectAsync(")
+    let addMissingAwaitBeforeAutomaticBalancingExecutor x =
+        Regex.Replace(x, "(?<!await) this.automaticBalancingExecutor.Execute", " await this.automaticBalancingExecutor.Execute")
+    let addMissingAwaitBeforeFakeChangedWorkdaysMessageSender x =
+        Regex.Replace(x, "(?<!await) this.factory\s*.FakeChangedWorkdaysMessageSender\s*.Send\(", " await this.factory.FakeChangedWorkdaysMessageSender.Send(")
+    let addMissingAwaitBeforeFakeWorkdayValidationMessageSender x =
+        Regex.Replace(x, "(?<!await) this.factory\s*.FakeWorkdayValidationMessageSender\s*.Send\(", " await this.factory.FakeWorkdayValidationMessageSender.Send(")
+    let addMissingSetupWorkflowToCreateAntrag x =
+        Regex.Replace(x, "(?<!await) this.factory.SetupWorkflowToCreateAntrag", " await this.factory.SetupWorkflowToCreateAntrag")
+    let addMissingSetupAuthenticationUser x =
+        Regex.Replace(x, "(?<!await) this.factory.SetupAuthenticationUser", " await this.factory.SetupAuthenticationUser")
+    let addMissingSetupIncompleteDayWorkflows x =
+        Regex.Replace(x, "(?<!await) this.factory.SetupIncompleteDayWorkflows", " await this.factory.SetupIncompleteDayWorkflows")
 
-    addMissingAwaitsBeforeFactory >> addMissingAsyncInForEachAsync >> addMissingAwaitsInForEachAsync >> addMissingAwaitsInSelectAsync
+    addMissingAwaitsBeforeFactory
+    >> addMissingAsyncInForEachAsync
+    >> addMissingAwaitsInForEachAsync
+    >> addMissingAwaitsInSelectAsync
+    >> addMissingAwaitBeforeAutomaticBalancingExecutor
+    >> addMissingAwaitBeforeFakeChangedWorkdaysMessageSender
+    >> addMissingAwaitBeforeFakeWorkdayValidationMessageSender
+    >> addMissingSetupWorkflowToCreateAntrag
+    >> addMissingSetupAuthenticationUser
+    >> addMissingSetupIncompleteDayWorkflows
 
 let replaceDoubleSemicolons o =
     Regex.Replace(o, ";\s*;", ";")
@@ -176,10 +210,25 @@ let setEmployeeContainerDefaults o =
     Regex.Replace(o, "EmployeeContainer (?<variable>\w*);", "EmployeeContainer ${variable} = default; // generated by migration")
 
 let replaceSetup =
+    let employeeAndApplicantAndPendenzempfänger x =
+        Regex.Replace(
+            x,
+            "Setup.Using\(\(\) => this.factory,\s*(?<setupDate>\w+)\)\s*.Employee\(\w+ => (?<employee>\w+) = \w+\)\s*.Applicant\(\w+ => (?<applicant>\w+) = \w+\)\s*.Pendenzempfänger\(\w+ => (?<pendenzEmpfänger>\w+) = \w+\);",
+            "${employee} = await this.factory.SetupEmployee().WithEntryDate(${setupDate}).Setup();\r\n            ${applicant} = await this.factory.SetupApplicant(${setupDate});\r\n            ${pendenzEmpfänger} = await this.factory.SetupPendenzempfänger(setupDate);")
+    let applicantAndPendenzempfänger x =
+        Regex.Replace(
+            x,
+            "Setup.Using\(\(\) => this.factory,\s*(?<setupDate>\w+)\)\s*.Applicant\(\w+ => (?<applicant>\w+) = \w+\)\s*.Pendenzempfänger\(\w+ => (?<pendenzEmpfänger>\w+) = \w+\);",
+            "${applicant} = await this.factory.SetupApplicant(${setupDate});\r\n            ${pendenzEmpfänger} = await this.factory.SetupPendenzempfänger(setupDate);")
     let employeeAndApplicant x =
         Regex.Replace(
             x,
             "Setup.Using\(\(\) => this.factory,\s*(?<setupDate>\w+)\)\s*.Employee\(\w+ => (?<employee>\w+) = \w+\)\s*.Applicant\(\w+ => (?<applicant>\w+) = \w+\);",
+            "${employee} = await this.factory.SetupEmployee().WithEntryDate(${setupDate}).Setup();\r\n            ${applicant} = await this.factory.SetupApplicant(${setupDate});")
+    let applicantAndEmployee x =
+        Regex.Replace(
+            x,
+            "Setup.Using\(\(\) => this.factory,\s*(?<setupDate>\w+)\)\s*.Applicant\(\w+ => (?<applicant>\w+) = \w+\)\s*.Employee\(\w+ => (?<employee>\w+) = \w+\);",
             "${employee} = await this.factory.SetupEmployee().WithEntryDate(${setupDate}).Setup();\r\n            ${applicant} = await this.factory.SetupApplicant(${setupDate});")
     let employee x =
         Regex.Replace(
@@ -192,7 +241,7 @@ let replaceSetup =
             "Setup.Using\(\(\) => this.factory,\s*(?<setupDate>\w+)\)\s*.Applicant\(\w+ => (?<applicant>\w+) = \w+\);",
             "${applicant} = await this.factory.SetupApplicant(${setupDate});")
 
-    employeeAndApplicant >> employee >> applicant
+    employeeAndApplicantAndPendenzempfänger >> employeeAndApplicant >> applicantAndEmployee >> applicantAndPendenzempfänger >> employee >> applicant
 
 
 let replaceCheck =
@@ -202,18 +251,48 @@ let replaceCheck =
             x,
             ".ForChangedWorkdays\(\s*\(\) => (?<employee>[ \w.<>\(\)]*),\s*(?<range>[ \w.<>\(\)]*),\s*(?<instant>[ \w.<>\(\)]*)\)",
             ".ForChangedWorkdays(${employee}, ${range}, ${instant})")
+    let forChangedWorkday x =
+        Regex.Replace(
+            x,
+            ".ForChangedWorkday\(\(\) => ",
+            ".ForChangedWorkday(")
+    let forAccountingDayLinks x =
+        Regex.Replace(
+            x,
+            ".ForAccountingDayLinks\(\(\) => ",
+            ".ForAccountingDayLinks(")
     let application x =
         Regex.Replace(
             x,
-            ".ForApplication\(\s*\(\) => (?<applicant>[ \w.<>\(\)]*),\s*(?<instant>[ \w.<>\(\)]*)\)",
+            ".ForApplication\(\s*\(\) => (?<applicant>[ \w.<>\(\)]*?),\s*(?<instant>[ \w.<>\(\)]*)\)",
             ".ForApplication(${applicant}, ${instant})")
     let representation x =
         Regex.Replace(
             x,
-            ".OperationRepresentation\((?<part1>[\s\w.<>\(\),]*)\(\) => (?<part2>[\s\w.<>\(\),]*)\(\) => ",
+            ".OperationRepresentation\((?<part1>[\s\w.<>\(\),]*?)\(\) => (?<part2>[\s\w.<>\(\),]*)\(\) => ",
             ".OperationRepresentation(${part1}${part2}")
+    let actions x =
+        Regex.Replace(
+            x,
+            "(?<prefix>OperationRepresentation[^;]*?)\(\) => new IActionRepresentation",
+            "${prefix}new IActionRepresentation")
+    let operationLog x =
+        Regex.Replace(
+            x,
+            "(?<prefix>OperationLog[^;]*?)\(\) => ",
+            "${prefix}")
 
-    check >> workday >> application >> representation
+    let antrag x =
+        Regex.Replace(
+            x,
+            "(?<prefix>ForLatestAntrag[^;]*?)\(\) => (?<middle>[^;]*)\(\) => ",
+            "${prefix}${middle}")
+
+
+    check >> workday >> application >> representation >> actions >> operationLog >> forChangedWorkday >> forAccountingDayLinks >> antrag
+
+let background x =
+    Regex.Replace(x, "(?<prefix>public class (?<name>[\wöäü0-9_]+)\s*{[a-zA-Z0-9\s;\(\)<>=]*)\[Background\]\s*public void Background", "${prefix}public ${name}")
 
 let migrate original =
     original
@@ -230,3 +309,5 @@ let migrate original =
     |> replaceDoubleSemicolons
     |> replaceSetup
     |> replaceCheck
+    |> setEmployeeContainerDefaults
+    |> background
